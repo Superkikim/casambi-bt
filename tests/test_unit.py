@@ -560,3 +560,75 @@ def test_unit_state_unknown_controls_reset() -> None:
     controls = unit.state.unknown_controls
     assert len(controls) == 1
     assert controls[0][2] == 0x02
+
+
+def test_getStateAsBytes_preserves_unkown_control_current_value() -> None:
+    """getStateAsBytes uses the UNKOWN control's current value, not its default."""
+    # 2-byte state: byte 0 = DIMMER (offset 0, length 8), byte 1 = UNKOWN (offset 8, length 8)
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.DIMMER,
+                offset=0,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+            UnitControl(
+                type=UnitControlType.UNKOWN,
+                offset=8,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+        ],
+        state_length=2,
+    )
+
+    # Set current state: dimmer=0x80, unkown=0x42
+    unit.setStateFromBytes(b"\x80\x42")
+    assert unit.state is not None
+    assert unit.state.unknown_controls == [(8, 8, 0x42)]
+
+    # Build a new desired state with only dimmer changed
+    new_state = UnitState()
+    new_state.dimmer = 0xFF
+
+    data = unit.getStateAsBytes(new_state)
+    assert len(data) == 2
+    assert data[0] == 0xFF  # dimmer changed
+    assert data[1] == 0x42  # UNKOWN preserved from current state
+
+
+def test_getStateAsBytes_uses_default_when_no_state() -> None:
+    """getStateAsBytes uses the UNKOWN control's default when there is no current state."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.DIMMER,
+                offset=0,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+            UnitControl(
+                type=UnitControlType.UNKOWN,
+                offset=8,
+                length=8,
+                default=0x7F,
+                readonly=False,
+            ),
+        ],
+        state_length=2,
+    )
+
+    # No state has been set yet
+    assert unit.state is None
+
+    new_state = UnitState()
+    new_state.dimmer = 0x10
+
+    data = unit.getStateAsBytes(new_state)
+    assert len(data) == 2
+    assert data[0] == 0x10
+    assert data[1] == 0x7F  # UNKOWN falls back to default

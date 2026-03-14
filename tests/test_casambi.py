@@ -419,3 +419,99 @@ async def test_disconnect(connected_casambi):
     connected_casambi._casaClient.disconnect.assert_called_once()
     mock_network.disconnect.assert_called_once()
     assert connected_casambi._casaNetwork is None
+
+
+# ── setControlValue tests ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_unit_with_unkown():
+    """2-byte unit: byte 0 = DIMMER, byte 1 = UNKOWN (default=0x55)."""
+    dimmer_ctrl = UnitControl(
+        type=UnitControlType.DIMMER, offset=0, length=8, default=0, readonly=False
+    )
+    unkown_ctrl = UnitControl(
+        type=UnitControlType.UNKOWN, offset=8, length=8, default=0x55, readonly=False
+    )
+    unit_type = UnitType(
+        id=3,
+        model="Model",
+        manufacturer="Casambi",
+        mode="Mode",
+        stateLength=2,
+        controls=[dimmer_ctrl, unkown_ctrl],
+    )
+    return Unit(
+        _typeId=3,
+        deviceId=12,
+        uuid="uuid3",
+        address="addr3",
+        name="Unit 3",
+        firmwareVersion="1.0",
+        unitType=unit_type,
+    )
+
+
+@pytest.fixture
+def connected_casambi_with_unkown(
+    casambi, mock_unit_with_unkown, mock_group, mock_scene
+):
+    mock_network = MagicMock()
+    mock_network.disconnect = AsyncMock()
+    mock_network._networkRevision = 1
+    mock_network._networkName = "Test Network"
+    mock_network._id = "test-id"
+    mock_network.units = [mock_unit_with_unkown]
+    mock_network.groups = [mock_group]
+    mock_network.scenes = [mock_scene]
+    mock_network.protocolVersion = 10
+
+    mock_client = AsyncMock()
+    mock_client._connectionState = ConnectionState.AUTHENTICATED
+
+    casambi._casaNetwork = mock_network
+    casambi._casaClient = mock_client
+    casambi._opContext = OperationsContextEvolution()
+    return casambi
+
+
+async def test_setControlValue_modifies_target_bits_only(
+    connected_casambi_with_unkown, mock_unit_with_unkown
+):
+    """setControlValue writes only the target control's bits; other bytes are unchanged."""
+    unit = mock_unit_with_unkown
+    # Set current state: dimmer=0x80, unkown=0x42
+    unit.setStateFromBytes(b"\x80\x42")
+
+    unkown_ctrl = unit.unitType.controls[1]  # UNKOWN at offset=8
+    await connected_casambi_with_unkown.setControlValue(unit, unkown_ctrl, 0xAB)
+
+    connected_casambi_with_unkown._casaClient.send.assert_called_once()
+    args, _ = connected_casambi_with_unkown._casaClient.send.call_args
+    pkt = args[0]
+    # Last 2 bytes of packet are the state payload
+    payload = pkt[-2:]
+    assert payload[0] == 0x80  # DIMMER unchanged
+    assert payload[1] == 0xAB  # UNKOWN updated
+
+    # Cached state updated
+    assert unit.state is not None
+    assert unit.state.unknown_controls[0][2] == 0xAB
+
+
+async def test_setControlValue_uses_zeros_when_no_state(
+    connected_casambi_with_unkown, mock_unit_with_unkown
+):
+    """setControlValue starts from all-zero bytes when raw_state is not available."""
+    unit = mock_unit_with_unkown
+    assert unit.state is None  # no state set yet
+
+    unkown_ctrl = unit.unitType.controls[1]  # UNKOWN at offset=8
+    await connected_casambi_with_unkown.setControlValue(unit, unkown_ctrl, 0xCD)
+
+    connected_casambi_with_unkown._casaClient.send.assert_called_once()
+    args, _ = connected_casambi_with_unkown._casaClient.send.call_args
+    pkt = args[0]
+    payload = pkt[-2:]
+    assert payload[0] == 0x00  # DIMMER = 0 (base is zeros)
+    assert payload[1] == 0xCD  # UNKOWN set
