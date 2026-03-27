@@ -36,77 +36,138 @@ class SwitchEvent:
     extra_data: bytes
 
 
+class SwitchEventDecoder:
+    """Stateful decoder that filters BLE retransmissions of switch events.
+
+    Wireless switches (e.g. EnOcean PTM215B) retransmit each physical event
+    up to 3 times.  This decoder suppresses repeated frames that carry the
+    same logical state as the last accepted frame for a given button, so
+    callers receive exactly one SwitchEvent per physical button action.
+
+    State is keyed on (unit_id, button_event_index) separately for the
+    button stream (0x06) and the input stream (0x12).
+    """
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or _LOGGER
+        # (unit_id, button_event_index) -> last accepted pressed state (True=pressed)
+        self._last_button_pressed: dict[tuple[int, int], bool] = {}
+        # (unit_id, button_event_index) -> last accepted input event code (payload[0])
+        self._last_input_code: dict[tuple[int, int], int] = {}
+
+    def reset(self) -> None:
+        """Clear all cached state (call on reconnect)."""
+        self._last_button_pressed.clear()
+        self._last_input_code.clear()
+
+    def decode(self, data: bytes, packet_seq: int) -> list[SwitchEvent]:
+        """Parse decrypted type-7 packet payload and return deduplicated switch events."""
+
+        frames = parse_invocation_stream(data, logger=self._logger)
+        events: list[SwitchEvent] = []
+
+        for frame in frames:
+            target_type = frame.target & 0xFF
+            unit_id = frame.target >> 8
+
+            if (
+                target_type == _TARGET_TYPE_BUTTON
+                and _BUTTON_EVENT_MIN <= frame.opcode <= _BUTTON_EVENT_MAX
+            ):
+                # Button stream: press/release encoded in bit 1 of origin low byte.
+                # Confirmed on PTM215B captures: is_release = (origin & 0x02) != 0
+                button_event_index = frame.opcode - _BUTTON_EVENT_MIN
+                is_release = bool(frame.origin & 0x02)
+                pressed = not is_release
+
+                state_key = (unit_id, button_event_index)
+                last_pressed = self._last_button_pressed.get(state_key)
+                if last_pressed is not None and last_pressed == pressed:
+                    self._logger.debug(
+                        "Suppressed button stream retransmit: unit_id=%d button_index=%d pressed=%s",
+                        unit_id,
+                        button_event_index,
+                        pressed,
+                    )
+                    continue
+                self._last_button_pressed[state_key] = pressed
+
+                event = ButtonEventType.RELEASE if is_release else ButtonEventType.PRESS
+                events.append(
+                    SwitchEvent(
+                        button_event_index=button_event_index,
+                        button=button_event_index + 1,
+                        unit_id=unit_id,
+                        target_type=target_type,
+                        event=event,
+                        flags=frame.flags,
+                        extra_data=frame.payload,
+                    )
+                )
+
+            elif (
+                target_type == _TARGET_TYPE_INPUT
+                and _INPUT_EVENT_MIN <= frame.opcode <= _INPUT_EVENT_MAX
+            ):
+                # Input stream: payload[0] is the event type directly.
+                # Confirmed on PTM215B: 0x02=RELEASE, 0x09=HOLD, 0x0C=RELEASE_AFTER_HOLD
+                if not frame.payload:
+                    self._logger.debug("Input stream frame with empty payload, skipping.")
+                    continue
+                button_event_index = frame.opcode - _INPUT_EVENT_MIN
+                event_code = frame.payload[0]
+
+                state_key = (unit_id, button_event_index)
+                last_code = self._last_input_code.get(state_key)
+                if last_code is not None and last_code == event_code:
+                    self._logger.debug(
+                        "Suppressed input stream retransmit: unit_id=%d button_index=%d code=0x%02x",
+                        unit_id,
+                        button_event_index,
+                        event_code,
+                    )
+                    continue
+                self._last_input_code[state_key] = event_code
+
+                try:
+                    event = ButtonEventType(event_code)
+                except ValueError:
+                    self._logger.debug(
+                        "Unknown input event code 0x%02x in input stream frame.",
+                        event_code,
+                    )
+                    event = ButtonEventType.UNKNOWN
+                events.append(
+                    SwitchEvent(
+                        button_event_index=button_event_index,
+                        button=button_event_index + 1,
+                        unit_id=unit_id,
+                        target_type=target_type,
+                        event=event,
+                        flags=frame.flags,
+                        extra_data=frame.payload[1:],
+                    )
+                )
+
+            else:
+                self._logger.debug(
+                    "Ignoring INVOCATION frame: opcode=0x%02x target_type=0x%02x.",
+                    frame.opcode,
+                    target_type,
+                )
+
+        if not events:
+            self._logger.debug("No switch events found in packet #%s.", packet_seq)
+
+        return events
+
+
 def parseSwitchEvents(
     data: bytes, packet_seq: int, raw_packet: bytes | None = None
 ) -> list[SwitchEvent]:
-    """Parse decrypted type-7 packet payload as INVOCATION frames and emit switch events."""
+    """Stateless parse helper — no retransmission filtering.
 
-    frames = parse_invocation_stream(data, logger=_LOGGER)
-    events: list[SwitchEvent] = []
-
-    for frame in frames:
-        target_type = frame.target & 0xFF
-        unit_id = frame.target >> 8
-
-        if (
-            target_type == _TARGET_TYPE_BUTTON
-            and _BUTTON_EVENT_MIN <= frame.opcode <= _BUTTON_EVENT_MAX
-        ):
-            # Button stream: press/release encoded in bit 1 of origin low byte.
-            # Confirmed on PTM215B captures: is_release = (origin & 0x02) != 0
-            button_event_index = frame.opcode - _BUTTON_EVENT_MIN
-            is_release = bool(frame.origin & 0x02)
-            event = ButtonEventType.RELEASE if is_release else ButtonEventType.PRESS
-            events.append(
-                SwitchEvent(
-                    button_event_index=button_event_index,
-                    button=button_event_index + 1,
-                    unit_id=unit_id,
-                    target_type=target_type,
-                    event=event,
-                    flags=frame.flags,
-                    extra_data=frame.payload,
-                )
-            )
-
-        elif (
-            target_type == _TARGET_TYPE_INPUT
-            and _INPUT_EVENT_MIN <= frame.opcode <= _INPUT_EVENT_MAX
-        ):
-            # Input stream: payload[0] is the event type directly (matches ButtonEventType values).
-            # Confirmed on PTM215B: 0x02=RELEASE, 0x09=HOLD, 0x0C=RELEASE_AFTER_HOLD
-            if not frame.payload:
-                _LOGGER.debug("Input stream frame with empty payload, skipping.")
-                continue
-            button_event_index = frame.opcode - _INPUT_EVENT_MIN
-            try:
-                event = ButtonEventType(frame.payload[0])
-            except ValueError:
-                _LOGGER.debug(
-                    "Unknown input event code 0x%02x in input stream frame.",
-                    frame.payload[0],
-                )
-                event = ButtonEventType.UNKNOWN
-            events.append(
-                SwitchEvent(
-                    button_event_index=button_event_index,
-                    button=button_event_index + 1,
-                    unit_id=unit_id,
-                    target_type=target_type,
-                    event=event,
-                    flags=frame.flags,
-                    extra_data=frame.payload[1:],
-                )
-            )
-
-        else:
-            _LOGGER.debug(
-                "Ignoring INVOCATION frame: opcode=0x%02x target_type=0x%02x.",
-                frame.opcode,
-                target_type,
-            )
-
-    if not events:
-        _LOGGER.debug("No switch events found in packet #%s.", packet_seq)
-
-    return events
+    Prefer SwitchEventDecoder for persistent connections where retransmit
+    suppression is needed.
+    """
+    return SwitchEventDecoder().decode(data, packet_seq)
