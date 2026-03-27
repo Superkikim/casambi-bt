@@ -30,6 +30,7 @@ class SwitchEvent:
     button_event_index: int  # 0-based index from protocol (opcode - base)
     button: int  # 1-based label = button_event_index + 1
     unit_id: int
+    target_type: int  # 0x06 = button stream, 0x12 = input stream
     event: ButtonEventType
     flags: int
     extra_data: bytes
@@ -61,6 +62,7 @@ def parseSwitchEvents(
                     button_event_index=button_event_index,
                     button=button_event_index + 1,
                     unit_id=unit_id,
+                    target_type=target_type,
                     event=event,
                     flags=frame.flags,
                     extra_data=frame.payload,
@@ -90,6 +92,7 @@ def parseSwitchEvents(
                     button_event_index=button_event_index,
                     button=button_event_index + 1,
                     unit_id=unit_id,
+                    target_type=target_type,
                     event=event,
                     flags=frame.flags,
                     extra_data=frame.payload[1:],
