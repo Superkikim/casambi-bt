@@ -93,7 +93,9 @@ class SwitchEventDecoder:
                 if self._last_event.get(state_key) == event:
                     self._logger.debug(
                         "Suppressed retransmit (0x06): unit_id=%d button_index=%d event=%s",
-                        unit_id, button_event_index, event.name,
+                        unit_id,
+                        button_event_index,
+                        event.name,
                     )
                     continue
                 self._last_event[state_key] = event
@@ -120,7 +122,9 @@ class SwitchEventDecoder:
                 # 0x12 sends code=0x02 during long holds before HOLD arrives, causing
                 # a spurious RELEASE event if we don't filter it out.
                 if not frame.payload:
-                    self._logger.debug("Input stream frame with empty payload, skipping.")
+                    self._logger.debug(
+                        "Input stream frame with empty payload, skipping."
+                    )
                     continue
                 button_event_index = frame.opcode - _INPUT_EVENT_MIN
                 try:
@@ -135,7 +139,9 @@ class SwitchEventDecoder:
                 if event in (ButtonEventType.PRESS, ButtonEventType.RELEASE):
                     self._logger.debug(
                         "Ignored 0x12 %s (authoritative source is 0x06): unit_id=%d button_index=%d",
-                        event.name, unit_id, button_event_index,
+                        event.name,
+                        unit_id,
+                        button_event_index,
                     )
                     continue
 
@@ -143,7 +149,9 @@ class SwitchEventDecoder:
                 if self._last_event.get(state_key) == event:
                     self._logger.debug(
                         "Suppressed retransmit (0x12): unit_id=%d button_index=%d event=%s",
-                        unit_id, button_event_index, event.name,
+                        unit_id,
+                        button_event_index,
+                        event.name,
                     )
                     continue
                 self._last_event[state_key] = event

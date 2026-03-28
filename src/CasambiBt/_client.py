@@ -532,7 +532,9 @@ class CasambiClientEvolution(CasambiClient):
         if packetType == IncomingPacketType.UnitState:
             self._parseUnitStates(packetContents[1:])
         elif packetType == IncomingPacketType.SwitchEvent:
-            for s in self._switch_decoder.decode(packetContents[1:], self._inPacketCount):
+            for s in self._switch_decoder.decode(
+                packetContents[1:], self._inPacketCount
+            ):
                 self._dataCallback(IncomingPacketType.SwitchEvent, s)
         elif packetType == IncomingPacketType.NetworkConfig:
             # We don't care about the config the network thinks it has.
