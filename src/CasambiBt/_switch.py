@@ -47,13 +47,17 @@ class SwitchEventDecoder:
     Both streams are retransmitted up to 3 times.  A single physical action
     therefore produces up to 6 raw frames.
 
-    This decoder uses a single unified state dict keyed on
+    Stream responsibilities:
+      - 0x06 is the authoritative source for PRESS and RELEASE events.
+      - 0x12 is used exclusively for HOLD and RELEASE_AFTER_HOLD events.
+        Its PRESS (0x01) and RELEASE (0x02) codes are ignored because the 0x12
+        stream sends code=0x02 during a long hold (before the HOLD code=0x09
+        arrives), which would cause a spurious RELEASE event.
+
+    Retransmit deduplication uses a unified state dict keyed on
     (unit_id, button_event_index) → last accepted ButtonEventType.
     A frame is suppressed if it carries the same logical event as the last
-    accepted event for that button, regardless of which stream it came from.
-
-    Cross-stream benefit: if the 0x06 RELEASE is lost, the 0x12 RELEASE still
-    fires (state change PRESS→RELEASE detected via the unified dict).
+    accepted event for that button.
     """
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
@@ -112,6 +116,9 @@ class SwitchEventDecoder:
             ):
                 # Input stream: payload[0] is the event type directly.
                 # Confirmed on PTM215B: 0x01=PRESS, 0x02=RELEASE, 0x09=HOLD, 0x0C=RELEASE_AFTER_HOLD
+                # PRESS and RELEASE are ignored here — 0x06 is authoritative for those.
+                # 0x12 sends code=0x02 during long holds before HOLD arrives, causing
+                # a spurious RELEASE event if we don't filter it out.
                 if not frame.payload:
                     self._logger.debug("Input stream frame with empty payload, skipping.")
                     continue
@@ -124,6 +131,13 @@ class SwitchEventDecoder:
                         frame.payload[0],
                     )
                     event = ButtonEventType.UNKNOWN
+
+                if event in (ButtonEventType.PRESS, ButtonEventType.RELEASE):
+                    self._logger.debug(
+                        "Ignored 0x12 %s (authoritative source is 0x06): unit_id=%d button_index=%d",
+                        event.name, unit_id, button_event_index,
+                    )
+                    continue
 
                 state_key = (unit_id, button_event_index)
                 if self._last_event.get(state_key) == event:
