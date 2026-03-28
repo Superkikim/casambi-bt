@@ -546,7 +546,7 @@ class CasambiClientEvolution(CasambiClient):
             self._logger.info(f"Packet type {packetType} not implemented. Ignoring!")
 
     def _parseUnitStates(self, data: bytes) -> None:
-        self._logger.info("Parsing incoming unit states...")
+        self._logger.debug("Parsing incoming unit states...")
         self._logger.debug(f"Incoming unit state: {b2a(data)}")
 
         pos = 0
