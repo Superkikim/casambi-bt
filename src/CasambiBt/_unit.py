@@ -59,6 +59,13 @@ class UnitControlType(Enum, metaclass=_DeprecatingMeta):
     SENSOR = 9
     """A sensor value of the light."""
 
+    WHITECOLORBALANCE = 10
+    """The white/color balance of a PWM RGB+TW light can be adjusted.
+
+    This is a 6-bit cross-fade value (raw 0–63) that blends the white and color
+    LED channels.  raw=0 → pure white, raw=63 → pure color.
+    """
+
     UNIMPLEMENTED = 98
     """Control type exists in the protocol but is not yet implemented in this library."""
 
@@ -144,9 +151,30 @@ class UnitState:
         self._xy: tuple[float, float] | None = None
         self._slider: int | None = None
         self._onoff: bool | None = None
+        self._white_balance: int | None = None
         self._raw_state: bytes | None = None
         self._unknown_controls: list[tuple[int, int, int]] = []
         self._sensors: dict[str, int] = {}
+
+    WHITE_BALANCE_MIN: Final = 0
+    WHITE_BALANCE_MAX: Final = 63  # 6-bit raw value
+
+    @property
+    def white_balance(self) -> int | None:
+        """Return the white/color balance raw value (0–63), or None if not yet received.
+
+        0 = pure white, 63 = pure color.
+        """
+        return self._white_balance
+
+    @white_balance.setter
+    def white_balance(self, value: int) -> None:
+        self._check_range(value, self.WHITE_BALANCE_MIN, self.WHITE_BALANCE_MAX)
+        self._white_balance = value
+
+    @white_balance.deleter
+    def white_balance(self) -> None:
+        self._white_balance = None
 
     @property
     def raw_state(self) -> bytes | None:
@@ -561,13 +589,24 @@ class Unit:
                 scaledValue = state.slider >> scale
             elif c.type == UnitControlType.ONOFF and state.onoff is not None:
                 scaledValue = 1 if state.onoff else 0
+            elif (
+                c.type == UnitControlType.WHITECOLORBALANCE
+                and state.white_balance is not None
+            ):
+                scaledValue = state.white_balance
 
             # Use default if unsupported type or unset value in state.
-            # For UNKOWN controls: use the most recently received value so that
-            # a setUnitState() call does not silently reset controls the caller
-            # did not intend to change.
+            # For WHITECOLORBALANCE and UNKNOWN controls: preserve the most recently
+            # received value so that a setUnitState() call does not silently reset
+            # controls the caller did not intend to change.
             else:
-                if c.type == UnitControlType.UNKOWN and self._state:
+                if c.type == UnitControlType.WHITECOLORBALANCE and self._state:
+                    scaledValue = (
+                        self._state.white_balance
+                        if self._state.white_balance is not None
+                        else c.default
+                    )
+                elif c.type == UnitControlType.UNKOWN and self._state:
                     scaledValue = next(
                         (
                             v
@@ -604,6 +643,7 @@ class Unit:
             self._state = UnitState()
 
         self._state._raw_state = value
+        self._state._white_balance = None
         self._state._unknown_controls = []
         self._state._sensors = {}
 
@@ -652,6 +692,8 @@ class Unit:
                 _LOGGER.debug(
                     f"Sensor control at {c.offset}: {cInt}. Unit type is {self.unitType.id}."
                 )
+            elif c.type == UnitControlType.WHITECOLORBALANCE:
+                self._state.white_balance = cInt
             elif c.type == UnitControlType.UNKNOWN:
                 # Might be useful for implementing more state types
                 _LOGGER.debug(

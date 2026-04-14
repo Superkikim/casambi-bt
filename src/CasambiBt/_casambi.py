@@ -430,6 +430,28 @@ class Casambi:
         payload = UnitState.payload_from_xy(xyColor, length)
         await self._send(target, payload, OpCode.SetColorXY)
 
+    async def setWhiteColorBalance(self, unit: Unit, value: int) -> None:
+        """Set the white/color balance for a PWM RGB+TW unit.
+
+        ``value`` is the raw 6-bit cross-fade level in the range [0, 63].
+        0 = pure white channel, 63 = pure color channel.
+
+        The balance is written via :meth:`setControlValue` which manipulates the
+        raw state bytes in-place and sends a ``SetState`` opcode, so all other
+        controls (brightness, colour, temperature) are preserved.
+
+        :param unit: The target unit.  Must have a ``WHITECOLORBALANCE`` control.
+        :param value: Raw balance level in range [0, 63].
+        :raises ValueError: The unit does not support ``WHITECOLORBALANCE``, or value out of range.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
+        """
+        if value < 0 or value > 63:
+            raise ValueError(f"White/color balance value {value} is not in range [0, 63].")
+        control = unit.unitType.get_control(UnitControlType.WHITECOLORBALANCE)
+        if control is None:
+            raise ValueError("The unit does not support WHITECOLORBALANCE.")
+        await self.setControlValue(unit, control, value)
+
     async def turnOn(self, target: Unit | Group | None) -> None:
         """Turn one or multiple units on to their last level.
 
