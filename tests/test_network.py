@@ -14,6 +14,7 @@ from CasambiBt._cache import Cache
 from CasambiBt._network import (
     SESSION_CACHE_FILE,
     TYPES_CACHE_FILE,
+    TYPES_CACHE_VERSION,
     Network,
     _NetworkSession,
 )
@@ -278,7 +279,8 @@ async def test_load_session_and_types(network: Network, cache: Cache):
 
     async with cache as cache_path:
         await (cache_path / SESSION_CACHE_FILE).write_bytes(pickle.dumps(session))
-        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(unit_types))
+        versioned_payload = (TYPES_CACHE_VERSION, unit_types)
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(versioned_payload))
 
     await network._loadSession()
     await network._loadTypeCache()
@@ -481,3 +483,59 @@ async def test_update_classic_network(network: Network, mock_client: AsyncMock):
     assert network.protocolVersion == 5
     assert len(network.units) == 1
     assert network.units[0]._isClassic is True
+
+
+# ── Type cache versioning tests ───────────────────────────────────────────────
+
+
+async def test_load_type_cache_correct_version(network: Network, cache: Cache):
+    """A versioned cache with the current version is loaded normally."""
+    unit_types = {42: (None, datetime.now(UTC) + timedelta(days=1))}
+    versioned_payload = (TYPES_CACHE_VERSION, unit_types)
+
+    async with cache as cache_path:
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(versioned_payload))
+
+    await network._loadTypeCache()
+
+    assert network._unitTypes == unit_types
+
+
+async def test_load_type_cache_outdated_version_discarded(network: Network, cache: Cache):
+    """A cache with an outdated version is discarded and _unitTypes stays empty."""
+    unit_types = {42: (None, datetime.now(UTC) + timedelta(days=1))}
+    outdated_payload = (TYPES_CACHE_VERSION - 1, unit_types)
+
+    async with cache as cache_path:
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(outdated_payload))
+
+    await network._loadTypeCache()
+
+    assert network._unitTypes == {}
+
+
+async def test_load_type_cache_legacy_unversioned_discarded(network: Network, cache: Cache):
+    """A legacy unversioned cache (plain dict) is discarded as version 0."""
+    unit_types = {42: (None, datetime.now(UTC) + timedelta(days=1))}
+
+    async with cache as cache_path:
+        # Write old-style plain dict (no version wrapper)
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(unit_types))
+
+    await network._loadTypeCache()
+
+    assert network._unitTypes == {}
+
+
+async def test_save_and_reload_type_cache_roundtrip(network: Network, cache: Cache):
+    """_saveTypeCache followed by _loadTypeCache produces the same data."""
+    unit_types = {7: (None, datetime.now(UTC) + timedelta(days=1))}
+    network._unitTypes = unit_types
+
+    await network._saveTypeCache()
+
+    # Fresh network instance loading from the same cache
+    network2 = Network("test-uuid", AsyncMock(spec=httpx.AsyncClient), cache)
+    await network2._loadTypeCache()
+
+    assert network2._unitTypes == unit_types
