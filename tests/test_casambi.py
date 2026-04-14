@@ -381,10 +381,10 @@ def test_data_callback_switch_event(connected_casambi):
 
     event = SwitchEvent(
         unit_id=1,
+        button_event_index=0,
         button=1,
         event=ButtonEventType.PRESS,
-        action=1,
-        message_type=0x08,
+        target_type=0x06,
         flags=0x00,
         extra_data=b"",
     )

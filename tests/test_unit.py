@@ -632,3 +632,204 @@ def test_getStateAsBytes_uses_default_when_no_state() -> None:
     assert len(data) == 2
     assert data[0] == 0x10
     assert data[1] == 0x7F  # UNKOWN falls back to default
+
+
+# ── WHITECOLORBALANCE tests ───────────────────────────────────────────────────
+
+
+def test_unit_state_white_balance() -> None:
+    """white_balance accepts 0–63, rejects out-of-range, supports del."""
+    state = UnitState()
+    assert state.white_balance is None
+
+    state.white_balance = 0
+    assert state.white_balance == 0
+
+    state.white_balance = 31
+    assert state.white_balance == 31
+
+    state.white_balance = 63
+    assert state.white_balance == 63
+
+    with pytest.raises(ValueError):
+        state.white_balance = -1
+
+    with pytest.raises(ValueError):
+        state.white_balance = 64
+
+    del state.white_balance
+    assert state.white_balance is None
+
+
+def test_setStateFromBytes_decodes_white_color_balance() -> None:
+    """setStateFromBytes populates state.white_balance for WHITECOLORBALANCE controls."""
+    # 1-byte state: 6-bit WCB at offset 0, length 6
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=0,
+                length=6,
+                default=31,
+                readonly=False,
+            )
+        ],
+        state_length=1,
+    )
+
+    # raw byte 0x1F = 0b00011111 = 31 decimal
+    unit.setStateFromBytes(b"\x1f")
+    assert unit.state is not None
+    assert unit.state.white_balance == 31
+
+    # raw byte 0x00 = pure white
+    unit.setStateFromBytes(b"\x00")
+    assert unit.state.white_balance == 0
+
+    # raw byte 0x3F = 63 = pure color
+    unit.setStateFromBytes(b"\x3f")
+    assert unit.state.white_balance == 63
+
+
+def test_setStateFromBytes_resets_white_balance_on_each_call() -> None:
+    """white_balance is reset to None then re-decoded on each setStateFromBytes call."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=0,
+                length=6,
+                default=31,
+                readonly=False,
+            )
+        ],
+        state_length=1,
+    )
+
+    unit.setStateFromBytes(b"\x0a")  # raw=10
+    assert unit.state is not None
+    assert unit.state.white_balance == 10
+
+    unit.setStateFromBytes(b"\x28")  # raw=40
+    assert unit.state.white_balance == 40
+
+
+def test_getStateAsBytes_writes_white_color_balance() -> None:
+    """getStateAsBytes encodes state.white_balance into the correct bit field."""
+    # 2-byte state: byte 0 = DIMMER (offset 0, len 8), 6-bit WCB at offset 8
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.DIMMER,
+                offset=0,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=8,
+                length=6,
+                default=31,
+                readonly=False,
+            ),
+        ],
+        state_length=2,
+    )
+
+    new_state = UnitState()
+    new_state.dimmer = 0x80
+    new_state.white_balance = 10
+
+    data = unit.getStateAsBytes(new_state)
+    assert len(data) == 2
+    assert data[0] == 0x80  # dimmer
+    assert data[1] == 10    # WCB raw value
+
+
+def test_getStateAsBytes_preserves_white_balance_when_not_in_new_state() -> None:
+    """getStateAsBytes preserves the current white_balance when the new state has none."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.DIMMER,
+                offset=0,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=8,
+                length=6,
+                default=31,
+                readonly=False,
+            ),
+        ],
+        state_length=2,
+    )
+
+    # Establish current state: dimmer=0x80, WCB=20
+    unit.setStateFromBytes(b"\x80\x14")  # 0x14 = 20
+    assert unit.state is not None
+    assert unit.state.white_balance == 20
+
+    # New state only changes dimmer — WCB should be preserved
+    new_state = UnitState()
+    new_state.dimmer = 0xFF
+
+    data = unit.getStateAsBytes(new_state)
+    assert data[0] == 0xFF  # dimmer updated
+    assert data[1] == 20    # WCB preserved from current state
+
+
+def test_getStateAsBytes_uses_wcb_default_when_no_current_state() -> None:
+    """getStateAsBytes uses the WCB control default when there is no current state."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.DIMMER,
+                offset=0,
+                length=8,
+                default=0,
+                readonly=False,
+            ),
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=8,
+                length=6,
+                default=31,
+                readonly=False,
+            ),
+        ],
+        state_length=2,
+    )
+
+    assert unit.state is None
+
+    new_state = UnitState()
+    new_state.dimmer = 0x10
+
+    data = unit.getStateAsBytes(new_state)
+    assert data[0] == 0x10
+    assert data[1] == 31   # WCB falls back to default
+
+
+def test_white_color_balance_not_in_unknown_controls() -> None:
+    """WHITECOLORBALANCE controls are NOT added to unknown_controls."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.WHITECOLORBALANCE,
+                offset=0,
+                length=6,
+                default=31,
+                readonly=False,
+            )
+        ],
+        state_length=1,
+    )
+
+    unit.setStateFromBytes(b"\x1f")
+    assert unit.state is not None
+    assert unit.state.unknown_controls == []
