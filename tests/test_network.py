@@ -11,7 +11,6 @@ import httpx
 import pytest
 
 from CasambiBt._cache import Cache
-from CasambiBt._unit import UnitType
 from CasambiBt._network import (
     SESSION_CACHE_FILE,
     TYPES_CACHE_FILE,
@@ -19,6 +18,7 @@ from CasambiBt._network import (
     Network,
     _NetworkSession,
 )
+from CasambiBt._unit import UnitType
 from CasambiBt.errors import (
     AuthenticationError,
     NetworkNotFoundError,
