@@ -27,7 +27,8 @@ TYPES_CACHE_FILE: Final = "types.pck"
 # On mismatch the types cache is discarded and all fixtures are re-fetched from
 # the Casambi API.  History:
 #   1 — initial versioned cache (added with WHITECOLORBALANCE support)
-TYPES_CACHE_VERSION: Final = 1
+#   2 — PRESENCE and LUX added; unrecognized types now map to UNKNOWN instead of UNIMPLEMENTED
+TYPES_CACHE_VERSION: Final = 2
 
 
 @dataclass()
@@ -120,7 +121,9 @@ class Network:
                     k: (t, dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt)
                     for k, (t, dt) in unitTypes.items()
                 }
-                self._logger.info("Unit type cache loaded (version %d).", cached_version)
+                self._logger.info(
+                    "Unit type cache loaded (version %d).", cached_version
+                )
 
     async def _saveTypeCache(self) -> None:
         self._logger.debug("Saving type cache...")
@@ -400,7 +403,7 @@ class Network:
                 self._logger.warning(
                     f"Unsupported control mode {typeStr} in fixture {id}."
                 )
-                type = UnitControlType.UNIMPLEMENTED
+                type = UnitControlType.UNKNOWN
 
             controlObj = UnitControl(
                 type,

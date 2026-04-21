@@ -744,7 +744,7 @@ def test_getStateAsBytes_writes_white_color_balance() -> None:
     data = unit.getStateAsBytes(new_state)
     assert len(data) == 2
     assert data[0] == 0x80  # dimmer
-    assert data[1] == 10    # WCB raw value
+    assert data[1] == 10  # WCB raw value
 
 
 def test_getStateAsBytes_preserves_white_balance_when_not_in_new_state() -> None:
@@ -780,7 +780,7 @@ def test_getStateAsBytes_preserves_white_balance_when_not_in_new_state() -> None
 
     data = unit.getStateAsBytes(new_state)
     assert data[0] == 0xFF  # dimmer updated
-    assert data[1] == 20    # WCB preserved from current state
+    assert data[1] == 20  # WCB preserved from current state
 
 
 def test_getStateAsBytes_uses_wcb_default_when_no_current_state() -> None:
@@ -812,7 +812,7 @@ def test_getStateAsBytes_uses_wcb_default_when_no_current_state() -> None:
 
     data = unit.getStateAsBytes(new_state)
     assert data[0] == 0x10
-    assert data[1] == 31   # WCB falls back to default
+    assert data[1] == 31  # WCB falls back to default
 
 
 def test_white_color_balance_not_in_unknown_controls() -> None:
@@ -833,3 +833,150 @@ def test_white_color_balance_not_in_unknown_controls() -> None:
     unit.setStateFromBytes(b"\x1f")
     assert unit.state is not None
     assert unit.state.unknown_controls == []
+
+
+# ── PRESENCE and LUX tests ────────────────────────────────────────────────────
+
+
+def test_unit_state_presence() -> None:
+    """presence property stores values in [0, 3] and rejects out-of-range."""
+    state = UnitState()
+    assert state.presence is None
+
+    state.presence = 0
+    assert state.presence == 0
+
+    state.presence = 1
+    assert state.presence == 1
+
+    state.presence = 3
+    assert state.presence == 3
+
+    with pytest.raises(ValueError):
+        state.presence = -1
+
+    with pytest.raises(ValueError):
+        state.presence = 4
+
+    del state.presence
+    assert state.presence is None
+
+
+def test_unit_state_lux() -> None:
+    """lux property stores values in [0, 4095] and rejects out-of-range."""
+    state = UnitState()
+    assert state.lux is None
+
+    state.lux = 0
+    assert state.lux == 0
+
+    state.lux = 2048
+    assert state.lux == 2048
+
+    state.lux = 4095
+    assert state.lux == 4095
+
+    with pytest.raises(ValueError):
+        state.lux = -1
+
+    with pytest.raises(ValueError):
+        state.lux = 4096
+
+    del state.lux
+    assert state.lux is None
+
+
+def test_setStateFromBytes_decodes_presence() -> None:
+    """PRESENCE control is decoded correctly into UnitState.presence."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.PRESENCE,
+                offset=0,
+                length=2,
+                default=0,
+                readonly=False,
+            )
+        ],
+        state_length=1,
+    )
+
+    # 0b01 in bits [1:0] → presence = 1 (present)
+    unit.setStateFromBytes(b"\x01")
+    assert unit.state is not None
+    assert unit.state.presence == 1
+
+    # 0b00 → absent
+    unit.setStateFromBytes(b"\x00")
+    assert unit.state.presence == 0
+
+
+def test_setStateFromBytes_decodes_lux() -> None:
+    """LUX control is decoded correctly into UnitState.lux."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.LUX,
+                offset=0,
+                length=12,
+                default=0,
+                readonly=False,
+            )
+        ],
+        state_length=2,
+    )
+
+    # 500 lux, little-endian 12-bit in 2 bytes: 500 = 0x1F4 → bytes 0xF4 0x01
+    unit.setStateFromBytes(b"\xf4\x01")
+    assert unit.state is not None
+    assert unit.state.lux == 500
+
+    unit.setStateFromBytes(b"\x00\x00")
+    assert unit.state.lux == 0
+
+
+def test_getStateAsBytes_encodes_presence() -> None:
+    """PRESENCE control is encoded correctly from UnitState.presence."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.PRESENCE,
+                offset=0,
+                length=2,
+                default=0,
+                readonly=False,
+            )
+        ],
+        state_length=1,
+    )
+
+    state = UnitState()
+    state.presence = 1
+    data = unit.getStateAsBytes(state)
+    assert data[0] & 0x03 == 1
+
+    state.presence = 0
+    data = unit.getStateAsBytes(state)
+    assert data[0] & 0x03 == 0
+
+
+def test_getStateAsBytes_encodes_lux() -> None:
+    """LUX control is encoded correctly from UnitState.lux."""
+    unit = _make_unit(
+        [
+            UnitControl(
+                type=UnitControlType.LUX,
+                offset=0,
+                length=12,
+                default=0,
+                readonly=False,
+            )
+        ],
+        state_length=2,
+    )
+
+    state = UnitState()
+    state.lux = 500
+    data = unit.getStateAsBytes(state)
+    val = int.from_bytes(data[:2], byteorder="little") & 0xFFF
+    assert val == 500

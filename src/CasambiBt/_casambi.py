@@ -446,7 +446,9 @@ class Casambi:
         :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         if value < 0 or value > 63:
-            raise ValueError(f"White/color balance value {value} is not in range [0, 63].")
+            raise ValueError(
+                f"White/color balance value {value} is not in range [0, 63]."
+            )
         control = unit.unitType.get_control(UnitControlType.WHITECOLORBALANCE)
         if control is None:
             raise ValueError("The unit does not support WHITECOLORBALANCE.")

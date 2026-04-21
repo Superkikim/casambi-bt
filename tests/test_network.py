@@ -280,7 +280,9 @@ async def test_load_session_and_types(network: Network, cache: Cache):
     async with cache as cache_path:
         await (cache_path / SESSION_CACHE_FILE).write_bytes(pickle.dumps(session))
         versioned_payload = (TYPES_CACHE_VERSION, unit_types)
-        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(versioned_payload))
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(
+            pickle.dumps(versioned_payload)
+        )
 
     await network._loadSession()
     await network._loadTypeCache()
@@ -494,27 +496,35 @@ async def test_load_type_cache_correct_version(network: Network, cache: Cache):
     versioned_payload = (TYPES_CACHE_VERSION, unit_types)
 
     async with cache as cache_path:
-        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(versioned_payload))
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(
+            pickle.dumps(versioned_payload)
+        )
 
     await network._loadTypeCache()
 
     assert network._unitTypes == unit_types
 
 
-async def test_load_type_cache_outdated_version_discarded(network: Network, cache: Cache):
+async def test_load_type_cache_outdated_version_discarded(
+    network: Network, cache: Cache
+):
     """A cache with an outdated version is discarded and _unitTypes stays empty."""
     unit_types = {42: (None, datetime.now(UTC) + timedelta(days=1))}
     outdated_payload = (TYPES_CACHE_VERSION - 1, unit_types)
 
     async with cache as cache_path:
-        await (cache_path / TYPES_CACHE_FILE).write_bytes(pickle.dumps(outdated_payload))
+        await (cache_path / TYPES_CACHE_FILE).write_bytes(
+            pickle.dumps(outdated_payload)
+        )
 
     await network._loadTypeCache()
 
     assert network._unitTypes == {}
 
 
-async def test_load_type_cache_legacy_unversioned_discarded(network: Network, cache: Cache):
+async def test_load_type_cache_legacy_unversioned_discarded(
+    network: Network, cache: Cache
+):
     """A legacy unversioned cache (plain dict) is discarded as version 0."""
     unit_types = {42: (None, datetime.now(UTC) + timedelta(days=1))}
 
