@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from CasambiBt._cache import Cache
+from CasambiBt._unit import UnitType
 from CasambiBt._network import (
     SESSION_CACHE_FILE,
     TYPES_CACHE_FILE,
@@ -539,7 +540,7 @@ async def test_load_type_cache_legacy_unversioned_discarded(
 
 async def test_save_and_reload_type_cache_roundtrip(network: Network, cache: Cache):
     """_saveTypeCache followed by _loadTypeCache produces the same data."""
-    unit_types = {7: (None, datetime.now(UTC) + timedelta(days=1))}
+    unit_types: dict[int, tuple[UnitType | None, datetime]] = {7: (None, datetime.now(UTC) + timedelta(days=1))}
     network._unitTypes = unit_types
 
     await network._saveTypeCache()
