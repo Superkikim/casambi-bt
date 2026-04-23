@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from enum import Enum, unique
+from time import monotonic
 from typing import Final
 
 from ._invocation import parse_invocation_stream
@@ -14,6 +15,8 @@ _INPUT_EVENT_MAX: Final[int] = 71  # FunctionNotifyInput7
 
 _TARGET_TYPE_BUTTON: Final[int] = 0x06
 _TARGET_TYPE_INPUT: Final[int] = 0x12
+
+_DEDUP_WINDOW_SECONDS: Final[float] = 0.5
 
 
 @unique
@@ -54,20 +57,36 @@ class SwitchEventDecoder:
         stream sends code=0x02 during a long hold (before the HOLD code=0x09
         arrives), which would cause a spurious RELEASE event.
 
-    Retransmit deduplication uses a unified state dict keyed on
-    (unit_id, button_event_index) → last accepted ButtonEventType.
-    A frame is suppressed if it carries the same logical event as the last
-    accepted event for that button.
+    Retransmit deduplication uses the `origin` field from each INVOCATION frame
+    as the event identity: all retransmissions of the same physical action share
+    an identical `origin` value, while a new physical action always carries a
+    different `origin` (the device increments its sequence counter).  A 500 ms
+    time window prevents a stale entry from masking a future genuine event with
+    the same origin.
     """
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self._logger = logger or _LOGGER
-        # (unit_id, button_event_index) -> last accepted ButtonEventType
-        self._last_event: dict[tuple[int, int], ButtonEventType] = {}
+        # (unit_id, button_event_index, origin) -> monotonic timestamp of first acceptance
+        # Storing all three dimensions lets us suppress a retransmit of event A even
+        # after event B (different origin) has already been accepted for the same button.
+        self._seen_origins: dict[tuple[int, int, int], float] = {}
 
     def reset(self) -> None:
         """Clear all cached state (call on reconnect)."""
-        self._last_event.clear()
+        self._seen_origins.clear()
+
+    def _is_retransmit(self, unit_id: int, button_index: int, origin: int) -> bool:
+        """Return True if this frame is a retransmit of a recently accepted event.
+
+        Uses the protocol-level `origin` field as the event identity: all BLE
+        retransmissions of the same physical action share the same origin value,
+        while a new physical action always carries a different origin (the device
+        increments its sequence counter).  The time window guards against the edge
+        case where the same origin reappears after a very long gap.
+        """
+        ts = self._seen_origins.get((unit_id, button_index, origin))
+        return ts is not None and (monotonic() - ts) < _DEDUP_WINDOW_SECONDS
 
     def decode(self, data: bytes, packet_seq: int) -> list[SwitchEvent]:
         """Parse decrypted type-7 packet payload and return deduplicated switch events."""
@@ -89,16 +108,18 @@ class SwitchEventDecoder:
                 is_release = bool(frame.origin & 0x02)
                 event = ButtonEventType.RELEASE if is_release else ButtonEventType.PRESS
 
-                state_key = (unit_id, button_event_index)
-                if self._last_event.get(state_key) == event:
+                if self._is_retransmit(unit_id, button_event_index, frame.origin):
                     self._logger.debug(
-                        "Suppressed retransmit (0x06): unit_id=%d button_index=%d event=%s",
+                        "Suppressed retransmit (0x06): unit_id=%d button_index=%d event=%s origin=0x%04x",
                         unit_id,
                         button_event_index,
                         event.name,
+                        frame.origin,
                     )
                     continue
-                self._last_event[state_key] = event
+                self._seen_origins[(unit_id, button_event_index, frame.origin)] = (
+                    monotonic()
+                )
 
                 events.append(
                     SwitchEvent(
@@ -145,16 +166,18 @@ class SwitchEventDecoder:
                     )
                     continue
 
-                state_key = (unit_id, button_event_index)
-                if self._last_event.get(state_key) == event:
+                if self._is_retransmit(unit_id, button_event_index, frame.origin):
                     self._logger.debug(
-                        "Suppressed retransmit (0x12): unit_id=%d button_index=%d event=%s",
+                        "Suppressed retransmit (0x12): unit_id=%d button_index=%d event=%s origin=0x%04x",
                         unit_id,
                         button_event_index,
                         event.name,
+                        frame.origin,
                     )
                     continue
-                self._last_event[state_key] = event
+                self._seen_origins[(unit_id, button_event_index, frame.origin)] = (
+                    monotonic()
+                )
 
                 events.append(
                     SwitchEvent(
@@ -179,14 +202,3 @@ class SwitchEventDecoder:
             self._logger.debug("No switch events found in packet #%s.", packet_seq)
 
         return events
-
-
-def parseSwitchEvents(
-    data: bytes, packet_seq: int, raw_packet: bytes | None = None
-) -> list[SwitchEvent]:
-    """Stateless parse helper — no retransmission filtering.
-
-    Prefer SwitchEventDecoder for persistent connections where retransmit
-    suppression is needed.
-    """
-    return SwitchEventDecoder().decode(data, packet_seq)
